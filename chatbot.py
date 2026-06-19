@@ -1,13 +1,11 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import json
+import uuid
 from groq import Groq
-from supabase import create_client
 
 # --- CONFIGURE CLIENTS ---
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 # --- SESSION STATES ---
 if "conn" not in st.session_state:
@@ -18,49 +16,50 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "last_source" not in st.session_state:
     st.session_state.last_source = None
+if "sessions" not in st.session_state:
+    st.session_state.sessions = {}
+if "session_order" not in st.session_state:
+    st.session_state.session_order = []
 
-# --- SUPABASE FUNCTIONS ---
+# --- CHAT-SESSION STORE (in-memory) ---
 def create_new_session(title="New Chat"):
-    res = supabase.table("chat_sessions").insert({"title": title}).execute()
-    return res.data[0]["id"]
+    sid = str(uuid.uuid4())
+    st.session_state.sessions[sid] = {"title": title, "messages": []}
+    st.session_state.session_order.insert(0, sid)
+    return sid
 
 def save_message(session_id, nl_query, sql_query, columns, results):
-    supabase.table("chat_messages").insert({
-        "session_id": session_id,
-        "nl_query": nl_query,
-        "sql_query": sql_query,
-        "columns": json.dumps(columns),
-        "results": json.dumps(results)
-    }).execute()
+    if session_id in st.session_state.sessions:
+        st.session_state.sessions[session_id]["messages"].append({
+            "nl_query": nl_query,
+            "sql_query": sql_query,
+            "columns": columns,
+            "results": results,
+        })
 
 def load_messages(session_id):
-    res = supabase.table("chat_messages")\
-        .select("*")\
-        .eq("session_id", session_id)\
-        .order("created_at")\
-        .execute()
-    history = []
-    for row in res.data:
-        history.append((
-            row["nl_query"],
-            row["sql_query"],
-            json.loads(row["columns"]),
-            json.loads(row["results"])
-        ))
-    return history
+    if session_id not in st.session_state.sessions:
+        return []
+    return [
+        (m["nl_query"], m["sql_query"], m["columns"], m["results"])
+        for m in st.session_state.sessions[session_id]["messages"]
+    ]
 
 def get_all_sessions():
-    res = supabase.table("chat_sessions")\
-        .select("*")\
-        .order("created_at", desc=True)\
-        .execute()
-    return res.data
+    return [
+        {"id": sid, "title": st.session_state.sessions[sid]["title"]}
+        for sid in st.session_state.session_order
+        if sid in st.session_state.sessions
+    ]
 
 def delete_session(session_id):
-    supabase.table("chat_sessions").delete().eq("id", session_id).execute()
+    st.session_state.sessions.pop(session_id, None)
+    if session_id in st.session_state.session_order:
+        st.session_state.session_order.remove(session_id)
 
 def update_session_title(session_id, title):
-    supabase.table("chat_sessions").update({"title": title}).eq("id", session_id).execute()
+    if session_id in st.session_state.sessions:
+        st.session_state.sessions[session_id]["title"] = title
 
 # --- GROQ CALL ---
 def call_groq_api(natural_language_query: str, schema_info: str):
@@ -229,7 +228,6 @@ if conn:
             if sql_query:
                 columns, results = run_sql_query(conn, sql_query)
 
-                # auto title the session from first message
                 if len(st.session_state.history) == 0:
                     update_session_title(st.session_state.current_session_id, nl_query[:40])
 
