@@ -6,14 +6,20 @@ type Props = {
   onNew: () => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onClose?: () => void;
 };
 
-export default function Sidebar({ sessions, currentId, onNew, onSelect, onDelete }: Props) {
+export default function Sidebar({ sessions, currentId, onNew, onSelect, onDelete, onClose }: Props) {
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
         <span className="sidebar__logo">D</span>
         <span className="sidebar__name">DataGPT</span>
+        {onClose && (
+          <button className="sidebar__close" aria-label="Close menu" onClick={onClose}>
+            ×
+          </button>
+        )}
       </div>
 
       <button className="btn btn--primary btn--block" onClick={onNew}>

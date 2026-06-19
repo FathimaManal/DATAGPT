@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchSample, pingHealth, runQuery } from './api';
 import type { ChatSession, Dataset, Message } from './types';
 import Sidebar from './components/Sidebar';
 import SourcePicker from './components/SourcePicker';
 import ChatPanel from './components/ChatPanel';
+
+const STORAGE_KEY = 'datagpt.sessions.v1';
+const CURRENT_KEY = 'datagpt.currentId.v1';
 
 function uuid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -13,13 +16,33 @@ function newSession(): ChatSession {
   return { id: uuid(), title: 'New Chat', messages: [], createdAt: Date.now() };
 }
 
+function loadInitialSessions(): { sessions: ChatSession[]; currentId: string } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const savedId = localStorage.getItem(CURRENT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as ChatSession[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const validId = parsed.find((s) => s.id === savedId)?.id ?? parsed[0].id;
+        return { sessions: parsed, currentId: validId };
+      }
+    }
+  } catch {
+    /* fall through to defaults */
+  }
+  const s = newSession();
+  return { sessions: [s], currentId: s.id };
+}
+
 export default function App() {
-  const [sessions, setSessions] = useState<ChatSession[]>(() => [newSession()]);
-  const [currentId, setCurrentId] = useState<string>(() => sessions[0].id);
+  const initial = useRef(loadInitialSessions()).current;
+  const [sessions, setSessions] = useState<ChatSession[]>(initial.sessions);
+  const [currentId, setCurrentId] = useState<string>(initial.currentId);
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [datasetLoading, setDatasetLoading] = useState(false);
   const [datasetError, setDatasetError] = useState<string | null>(null);
   const [queryLoading, setQueryLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const current = useMemo(
     () => sessions.find((s) => s.id === currentId) ?? sessions[0],
@@ -29,6 +52,22 @@ export default function App() {
   useEffect(() => {
     pingHealth();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+    } catch {
+      /* storage full or disabled — ignore */
+    }
+  }, [sessions]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CURRENT_KEY, currentId);
+    } catch {
+      /* ignore */
+    }
+  }, [currentId]);
 
   const loadSample = async () => {
     setDatasetLoading(true);
@@ -57,9 +96,13 @@ export default function App() {
     const s = newSession();
     setSessions((prev) => [s, ...prev]);
     setCurrentId(s.id);
+    setSidebarOpen(false);
   };
 
-  const handleSelectSession = (id: string) => setCurrentId(id);
+  const handleSelectSession = (id: string) => {
+    setCurrentId(id);
+    setSidebarOpen(false);
+  };
 
   const handleDeleteSession = (id: string) => {
     setSessions((prev) => {
@@ -136,16 +179,27 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${sidebarOpen ? 'is-sidebar-open' : ''}`}>
       <Sidebar
         sessions={sessions}
         currentId={currentId}
         onNew={handleNewChat}
         onSelect={handleSelectSession}
         onDelete={handleDeleteSession}
+        onClose={() => setSidebarOpen(false)}
       />
+      {sidebarOpen && <div className="backdrop" onClick={() => setSidebarOpen(false)} />}
       <main className="main">
         <header className="header">
+          <button
+            className="header__menu"
+            aria-label="Open menu"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
           <div>
             <h1>DataGPT</h1>
             <p className="subtitle">Chat your way through data — ask questions, get SQL + answers.</p>
